@@ -94,7 +94,7 @@ func (c *Config) Save(path string) {
 	defer f.Close()
 
 	enc := json.NewEncoder(f)
-	err = enc.Encode(&c)
+	err = enc.Encode(c)
 
 	if err != nil {
 		return
@@ -116,7 +116,7 @@ func LoadConfigFile(path string) *Config {
 		}
 
 		dec := json.NewDecoder(f)
-		err = dec.Decode(&cfg)
+		err = dec.Decode(cfg)
 
 		if err != nil {
 			return cfg
