@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	det := processing.NewRemoteDetector("localhost:8080")
+	det := processing.NewRemoteDetector(config.DefaultDetectorProcessorUrl)
 
 	det.Start()
 	defer det.Stop()

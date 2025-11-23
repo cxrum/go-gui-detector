@@ -13,7 +13,8 @@ const (
 	SourceWebcam  SourceType = "Web-Camera"
 	SourceYouTube SourceType = "YouTube"
 
-	DefaultConfigPath string = "config.json"
+	DefaultConfigPath           string = "config.json"
+	DefaultDetectorProcessorUrl string = "localhost:8080"
 )
 
 var SourcesList = [...]string{
