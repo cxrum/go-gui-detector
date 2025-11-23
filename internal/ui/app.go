@@ -98,7 +98,7 @@ func (a *DetectApp) Run() {
 
 	a.refreshSettingsUI(string(a.config.ActiveSource))
 
-	a.mainWin.SetCloseIntercept(func() {
+	a.mainWin.SetOnClosed(func() {
 		a.config.SaveByDefault()
 	})
 
