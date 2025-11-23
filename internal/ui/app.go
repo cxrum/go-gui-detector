@@ -108,8 +108,7 @@ func (a *DetectApp) Run() {
 
 func (a *DetectApp) StopProcessing() {
 	if a.processor.IsActive {
-		close(a.processor.StopChan)
-		time.Sleep(50 * time.Millisecond)
+		a.processor.Stop()
 	}
 
 	if a.processor.InImageStream != nil {
@@ -123,8 +122,6 @@ func (a *DetectApp) StartProcessing(forceRestart bool) {
 	}
 
 	a.StopProcessing()
-
-	a.processor.StopChan = make(chan struct{})
 
 	if err := a.restartStreamer(); err != nil {
 		dialog.ShowError(err, a.mainWin)
@@ -155,7 +152,7 @@ func (a *DetectApp) runStatLoop() {
 	}
 }
 
-func (a *DetectApp) formatFPS(v uint) string {
+func (a *DetectApp) formatFPS(v uint64) string {
 	return fmt.Sprintf("FPS: %d", v)
 }
 

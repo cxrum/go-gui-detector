@@ -1,10 +1,11 @@
 package processing
 
 import (
-	"fmt"
 	"image"
 	"image/color"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vision/internal/config"
@@ -20,28 +21,32 @@ type Processor struct {
 	StopChan chan struct{}
 
 	Latency  time.Duration
-	FPS      uint
+	FPS      uint64
 	IsActive bool
 
 	cfg *config.Config
 	det *RemoteDetector
 
 	lastResults []models.DetectionResult
-	mu          sync.RWMutex
+
+	mu sync.RWMutex
 }
 
 func NewProcessor(cfg *config.Config, det *RemoteDetector) *Processor {
-	processor := Processor{
+	return &Processor{
 		cfg:            cfg,
 		det:            det,
 		ErrChan:        make(chan error, 1),
 		StopChan:       make(chan struct{}),
 		OutImageStream: make(chan image.Image, cfg.GetFPS()),
 	}
-	return &processor
 }
 
 func (p *Processor) Start() {
+	p.mu.Lock()
+	p.StopChan = make(chan struct{})
+	p.mu.Unlock()
+
 	go func() {
 		for results := range p.det.OutputResult {
 			p.mu.Lock()
@@ -52,14 +57,17 @@ func (p *Processor) Start() {
 
 	go func() {
 		p.IsActive = true
-		var frameCount uint = 0
+		var frameCount uint64 = 0
 		lastFpsUpdate := time.Now()
 
 		for {
 			select {
 			case frame, ok := <-p.InImageStream.FrameChan():
 				if !ok {
+					p.mu.Lock()
 					p.IsActive = false
+					p.mu.Unlock()
+
 					return
 				}
 				if frame == nil {
@@ -110,18 +118,22 @@ func (p *Processor) Start() {
 
 				frameCount++
 				if time.Since(lastFpsUpdate) >= time.Second {
-					p.FPS = frameCount
+
+					atomic.StoreUint64(&p.FPS, frameCount)
+
 					frameCount = 0
 					lastFpsUpdate = time.Now()
 				}
 
 			case err := <-p.InImageStream.ErrorChan():
-				fmt.Println("Помилка стрімера:", err)
+				log.Print("Streamer error:", err)
+				atomic.StoreUint64(&p.FPS, frameCount)
 				p.IsActive = false
 				return
 
 			case <-p.StopChan:
 				p.IsActive = false
+				log.Println("Proccesor stoped")
 				return
 			}
 		}
@@ -129,7 +141,8 @@ func (p *Processor) Start() {
 }
 
 func (p *Processor) Stop() {
-	p.StopChan <- struct{}{}
+	log.Println("command stop process")
+	close(p.StopChan)
 }
 
 func drawRect(img *image.RGBA, y1, x1, y2, x2 int, col color.Color) {

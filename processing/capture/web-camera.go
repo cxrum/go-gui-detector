@@ -32,9 +32,10 @@ func NewFFmpegWebcam(deviceName string, targetFps uint, scaledWidht int, scaledH
 		width:      scaledWidht,
 		height:     scaledHeight,
 		targetFPS:  targetFps,
-		frameChan:  make(chan image.Image),
-		errChan:    make(chan error, 1),
-		stopChan:   make(chan struct{}),
+
+		frameChan: make(chan image.Image),
+		errChan:   make(chan error, 1),
+		stopChan:  make(chan struct{}),
 	}
 }
 
@@ -94,6 +95,7 @@ func (ws *FFmpegWebcamStreamer) readLoop(stdout io.ReadCloser) {
 		select {
 		case <-ws.stopChan:
 			return
+
 		default:
 			_, err := io.ReadFull(stdout, buffer)
 			if err != nil {
@@ -161,7 +163,7 @@ func ListCameras() ([]string, error) {
 
 	if len(cameras) == 0 {
 		if runtime.GOOS == "windows" {
-			return []string{"Integrated Camera", "USB Video Device"}, nil
+			return []string{"No cameras found"}, nil
 		}
 	}
 
