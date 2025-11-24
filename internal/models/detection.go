@@ -1,9 +1,9 @@
 package models
 
 type DetectionResult struct {
-	Label      string    `json:"label"`
-	Confidence float32   `json:"confidence"`
-	Box        []float32 `json:"box"`
+	Class string    `json:"class"`
+	Score float32   `json:"score"`
+	Box   []float32 `json:"box"`
 }
 
 type Box struct {

@@ -53,16 +53,16 @@ func (d *RemoteDetector) runLoop() {
 		default:
 		}
 
-		log.Println("Connecting to detector server...", d.serverURL)
+		log.Println("connecting to detector server...", d.serverURL)
 		conn, _, err = websocket.DefaultDialer.Dial(d.serverURL, nil)
 
 		if err != nil {
-			log.Printf("Connection failed: %v. Retrying in 2s...", err)
-			time.Sleep(2 * time.Second)
+			log.Printf("connection failed: %v. retrying in 2s...", err)
+			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		log.Println("Connected to detection server!")
+		log.Println("connected to detection server!")
 
 		errChan := make(chan error, 1)
 
@@ -108,7 +108,7 @@ func (d *RemoteDetector) runLoop() {
 		}()
 
 		err = <-errChan
-		log.Printf("Connection lost: %v", err)
+		log.Printf("connection lost: %v", err)
 		conn.Close()
 	}
 }
