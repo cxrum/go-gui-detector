@@ -3,8 +3,10 @@ package ui
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"time"
 	"vision/internal/config"
+	"vision/internal/models"
 	"vision/internal/ui/cwidget"
 	"vision/processing/capture"
 	processing "vision/processing/detector"
@@ -28,7 +30,9 @@ type DetectApp struct {
 	dynamicSettings *fyne.Container
 	staticSettings  *fyne.Container
 
-	videoCanvas  *canvas.Image
+	videoCanvas   *canvas.Image
+	rectContainer *fyne.Container
+
 	latencyLabel *widget.Label
 	fpsLabel     *widget.Label
 }
@@ -36,7 +40,6 @@ type DetectApp struct {
 func CreateApp(p *processing.Processor, cfg *config.Config) *DetectApp {
 	a := app.New()
 	w := a.NewWindow("Video Stream")
-
 	w.Resize(fyne.NewSize(1200, 600))
 
 	return &DetectApp{
@@ -54,7 +57,6 @@ func (a *DetectApp) Run() {
 		a.config.ActiveSource = config.SourceType(s)
 		a.refreshSettingsUI(s)
 	})
-
 	sourceTypeSelect.SetSelected(string(a.config.ActiveSource))
 
 	settingsLabel := widget.NewLabelWithStyle("Configuration", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
@@ -63,13 +65,17 @@ func (a *DetectApp) Run() {
 	a.videoCanvas.FillMode = canvas.ImageFillContain
 	a.videoCanvas.SetMinSize(fyne.NewSize(640, 480))
 
+	a.rectContainer = container.NewWithoutLayout()
+
+	videoOverlay := container.NewStack(a.videoCanvas, a.rectContainer)
+
 	a.latencyLabel = widget.NewLabel(a.formatLatency(a.processor.Latency))
 	a.fpsLabel = widget.NewLabel(a.formatFPS(a.processor.FPS))
 
-	videoContainer := container.NewBorder(
+	videoSection := container.NewBorder(
 		container.NewHBox(a.fpsLabel, widget.NewSeparator(), a.latencyLabel),
 		nil, nil, nil,
-		a.videoCanvas,
+		videoOverlay,
 	)
 
 	a.setupConfigSettings()
@@ -90,7 +96,7 @@ func (a *DetectApp) Run() {
 
 	split := container.NewHSplit(
 		container.NewPadded(sidebar),
-		container.NewPadded(videoContainer),
+		container.NewPadded(videoSection),
 	)
 	split.SetOffset(0.3)
 
@@ -111,7 +117,7 @@ func (a *DetectApp) StopProcessing() {
 		a.processor.Stop()
 	}
 
-	if a.processor.InImageStream != nil {
+	if a.processor.IsStreamerActive {
 		a.processor.InImageStream.Stop()
 	}
 }
@@ -129,6 +135,7 @@ func (a *DetectApp) StartProcessing(forceRestart bool) {
 	}
 
 	a.processor.Start()
+
 	go a.runPlayerLoop()
 	go a.runStatLoop()
 }
@@ -164,11 +171,14 @@ func (a *DetectApp) runPlayerLoop() {
 	currentStopChan := a.processor.StopChan
 
 	frameChan := a.processor.OutImageStream
+	detectionsChan := a.processor.OutDetectionsStream
+
 	displayFPS := time.Duration(a.config.TargetFPS)
 	displayTicker := time.NewTicker(time.Second / displayFPS)
 	defer displayTicker.Stop()
 
 	var lastFrame image.Image
+	var lastDetections []models.DetectionResult
 
 	for {
 		select {
@@ -179,20 +189,79 @@ func (a *DetectApp) runPlayerLoop() {
 			if frame != nil {
 				lastFrame = frame
 			}
+		case detections, ok := <-detectionsChan:
+			if !ok {
+				return
+			}
+			if detections != nil {
+				lastDetections = detections
+			}
 
 		case <-displayTicker.C:
 			if lastFrame != nil {
 				fyne.Do(func() {
 					a.videoCanvas.Image = lastFrame
 					a.videoCanvas.Refresh()
+					a.updateRectangles(lastFrame.Bounds(), lastDetections)
 				})
-
 			}
 
 		case <-currentStopChan:
 			return
 		}
 	}
+}
+
+func (a *DetectApp) updateRectangles(imgBounds image.Rectangle, detections []models.DetectionResult) {
+	a.rectContainer.Objects = nil
+
+	if len(detections) == 0 {
+		a.rectContainer.Refresh()
+		return
+	}
+
+	canvasSize := a.videoCanvas.Size()
+
+	scaleX := float32(canvasSize.Width) / float32(imgBounds.Dx())
+	scaleY := float32(canvasSize.Height) / float32(imgBounds.Dy())
+
+	scale := scaleX
+	if scaleY < scaleX {
+		scale = scaleY
+	}
+
+	offsetX := (canvasSize.Width - float32(imgBounds.Dx())*scale) / 2
+	offsetY := (canvasSize.Height - float32(imgBounds.Dy())*scale) / 2
+
+	greenColor := color.RGBA{0, 255, 0, 255}
+
+	for _, det := range detections {
+		y1 := det.Box[0]
+		x1 := det.Box[1]
+		y2 := det.Box[2]
+		x2 := det.Box[3]
+
+		rectX := x1*float32(imgBounds.Dx())*scale + offsetX
+		rectY := y1*float32(imgBounds.Dy())*scale + offsetY
+		rectW := (x2 - x1) * float32(imgBounds.Dx()) * scale
+		rectH := (y2 - y1) * float32(imgBounds.Dy()) * scale
+
+		rect := canvas.NewRectangle(color.Transparent)
+		rect.StrokeColor = greenColor
+		rect.StrokeWidth = 3
+		rect.Resize(fyne.NewSize(rectW, rectH))
+		rect.Move(fyne.NewPos(rectX, rectY))
+
+		txt := canvas.NewText(fmt.Sprintf("%s %.0f%%", det.Class, det.Score*100), greenColor)
+		txt.TextSize = 12
+		txt.TextStyle = fyne.TextStyle{Bold: true}
+		txt.Move(fyne.NewPos(rectX, rectY-15))
+
+		a.rectContainer.Add(rect)
+		a.rectContainer.Add(txt)
+	}
+
+	a.rectContainer.Refresh()
 }
 
 func (a *DetectApp) restartStreamer() error {
@@ -207,55 +276,21 @@ func (a *DetectApp) restartStreamer() error {
 	}
 
 	a.processor.InImageStream = streamer
-
-	if err := a.processor.InImageStream.Start(); err != nil {
-		return err
-	}
-
-	return nil
+	return a.processor.InImageStream.Start()
 }
 
 func (a *DetectApp) setupConfigSettings() {
 
 	a.staticSettings = container.NewVBox()
 
-	fpsInput := cwidget.NewIntInput(
-		"FPS",
-		"Enter integer",
-		int(a.config.TargetFPS),
-		func(i int) {
-			a.config.SetFPS(uint(i))
-		},
-	)
-
-	widthInput := cwidget.NewIntInput(
-		"Width",
-		"Enter integer",
-		a.config.ScaledWitdh,
-		func(i int) {
-			a.config.SetWidth(i)
-		},
-	)
-
-	heightInput := cwidget.NewIntInput(
-		"Height",
-		"Enter integer",
-		a.config.ScaledHeight,
-		func(i int) {
-			a.config.SetHeight(i)
-		},
-	)
-
-	applayCfg := widget.NewButton("Save config", func() {
-		a.StartProcessing(true)
-	})
+	fpsInput := cwidget.NewIntInput("FPS", "Int", int(a.config.TargetFPS), func(i int) { a.config.SetFPS(uint(i)) })
+	widthInput := cwidget.NewIntInput("Width", "Int", a.config.ScaledWitdh, func(i int) { a.config.SetWidth(i) })
+	heightInput := cwidget.NewIntInput("Height", "Int", a.config.ScaledHeight, func(i int) { a.config.SetHeight(i) })
 
 	a.staticSettings.Add(fpsInput)
 	a.staticSettings.Add(widthInput)
 	a.staticSettings.Add(heightInput)
-
-	a.staticSettings.Add(applayCfg)
-
+	a.staticSettings.Add(widget.NewButton("Save config", func() { a.StartProcessing(true) }))
 }
 
 func (a *DetectApp) refreshSettingsUI(sourceType string) {

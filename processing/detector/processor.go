@@ -2,7 +2,6 @@ package processing
 
 import (
 	"image"
-	"image/color"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -14,60 +13,56 @@ import (
 )
 
 type Processor struct {
-	InImageStream  stream.VideoStreamer
-	OutImageStream chan image.Image
+	InImageStream stream.VideoStreamer
+
+	OutImageStream      chan image.Image
+	OutDetectionsStream chan []models.DetectionResult
 
 	ErrChan  chan error
 	StopChan chan struct{}
 
-	Latency  time.Duration
-	FPS      uint64
-	IsActive bool
+	Latency          time.Duration
+	FPS              uint64
+	IsActive         bool
+	IsStreamerActive bool
 
 	cfg *config.Config
 	det *RemoteDetector
-
-	lastResults []models.DetectionResult
 
 	mu sync.RWMutex
 }
 
 func NewProcessor(cfg *config.Config, det *RemoteDetector) *Processor {
 	return &Processor{
-		cfg:            cfg,
-		det:            det,
-		ErrChan:        make(chan error, 1),
-		StopChan:       make(chan struct{}),
-		OutImageStream: make(chan image.Image, cfg.GetFPS()),
+		cfg: cfg,
+		det: det,
+
+		ErrChan:             make(chan error, 1),
+		StopChan:            make(chan struct{}),
+		OutImageStream:      make(chan image.Image, cfg.GetFPS()),
+		OutDetectionsStream: make(chan []models.DetectionResult, cfg.GetFPS()),
 	}
 }
 
 func (p *Processor) Start() {
 	p.mu.Lock()
 	p.StopChan = make(chan struct{})
+	p.IsActive = true
 	p.mu.Unlock()
-
-	go func() {
-		for results := range p.det.OutputResult {
-			p.mu.Lock()
-			p.lastResults = results
-			p.mu.Unlock()
-		}
-	}()
 
 	go func() {
 		p.IsActive = true
 		var frameCount uint64 = 0
 		lastFpsUpdate := time.Now()
 
+		p.OutDetectionsStream = p.det.OutputResult
+
 		for {
 			select {
 			case frame, ok := <-p.InImageStream.FrameChan():
 				if !ok {
-					p.mu.Lock()
 					p.IsActive = false
-					p.mu.Unlock()
-
+					p.IsStreamerActive = false
 					return
 				}
 				if frame == nil {
@@ -79,32 +74,6 @@ func (p *Processor) Start() {
 				select {
 				case p.det.InputFrames <- frame:
 				default:
-
-				}
-
-				if rgbaImg, ok := frame.(*image.RGBA); ok {
-
-					p.mu.RLock()
-					currentDetections := p.lastResults
-					p.mu.RUnlock()
-
-					if len(currentDetections) > 0 {
-						bounds := rgbaImg.Bounds()
-						imgWidth := float32(bounds.Dx())
-						imgHeight := float32(bounds.Dy())
-
-						col := color.RGBA{0, 255, 0, 255}
-
-						for _, res := range currentDetections {
-
-							y1 := int(res.Box[0] * imgHeight)
-							x1 := int(res.Box[1] * imgWidth)
-							y2 := int(res.Box[2] * imgHeight)
-							x2 := int(res.Box[3] * imgWidth)
-
-							drawRect(rgbaImg, y1, x1, y2, x2, col)
-						}
-					}
 				}
 
 				p.mu.Lock()
@@ -118,22 +87,19 @@ func (p *Processor) Start() {
 
 				frameCount++
 				if time.Since(lastFpsUpdate) >= time.Second {
-
 					atomic.StoreUint64(&p.FPS, frameCount)
-
 					frameCount = 0
 					lastFpsUpdate = time.Now()
 				}
 
 			case err := <-p.InImageStream.ErrorChan():
 				log.Print("Streamer error:", err)
-				atomic.StoreUint64(&p.FPS, frameCount)
-				p.IsActive = false
+				p.IsStreamerActive = false
 				return
 
 			case <-p.StopChan:
 				p.IsActive = false
-				log.Println("Proccesor stoped")
+				p.IsStreamerActive = false
 				return
 			}
 		}
@@ -141,28 +107,15 @@ func (p *Processor) Start() {
 }
 
 func (p *Processor) Stop() {
-	log.Println("command stop process")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.IsActive {
+		return
+	}
+
 	close(p.StopChan)
-}
 
-func drawRect(img *image.RGBA, y1, x1, y2, x2 int, col color.Color) {
-	thickness := 3
-	bounds := img.Bounds()
-
-	setPixel := func(x, y int) {
-		if x >= bounds.Min.X && x < bounds.Max.X && y >= bounds.Min.Y && y < bounds.Max.Y {
-			img.Set(x, y, col)
-		}
-	}
-
-	for t := 0; t < thickness; t++ {
-		for x := x1; x <= x2; x++ {
-			setPixel(x, y1+t)
-			setPixel(x, y2-t)
-		}
-		for y := y1; y <= y2; y++ {
-			setPixel(x1+t, y)
-			setPixel(x2-t, y)
-		}
-	}
+	p.IsActive = false
+	p.IsStreamerActive = false
 }
