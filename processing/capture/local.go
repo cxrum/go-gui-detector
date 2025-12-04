@@ -83,6 +83,7 @@ func (ls *LocalFileStreamer) readFrames(stdout io.ReadCloser) {
 	defer close(ls.frameChan)
 	defer close(ls.errChan)
 	defer stdout.Close()
+	defer ls.stopCmdOut()
 
 	width := int(ls.s_width)
 	height := int(ls.s_height)
@@ -133,13 +134,17 @@ func (ls *LocalFileStreamer) readFrames(stdout io.ReadCloser) {
 	}
 }
 
+func (ls *LocalFileStreamer) stopCmdOut() {
+	if ls.cmd != nil && ls.cmd.Process != nil {
+		ls.cmd.Process.Kill()
+		ls.cmd.Wait()
+	}
+}
+
 func (ls *LocalFileStreamer) Stop() {
 	ls.stopOnce.Do(func() {
 		close(ls.stopChan)
-		if ls.cmd != nil && ls.cmd.Process != nil {
-			ls.cmd.Process.Kill()
-			ls.cmd.Wait()
-		}
+		ls.stopCmdOut()
 	})
 }
 
