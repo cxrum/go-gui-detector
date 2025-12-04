@@ -129,7 +129,6 @@ func (a *DetectApp) StartProcessing(forceRestart bool) {
 	}
 
 	a.processor.Start()
-
 	go a.runPlayerLoop()
 	go a.runStatLoop()
 }
