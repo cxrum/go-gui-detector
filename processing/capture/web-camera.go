@@ -87,6 +87,7 @@ func (ws *FFmpegWebcamStreamer) readLoop(stdout io.ReadCloser) {
 	defer close(ws.frameChan)
 	defer close(ws.errChan)
 	defer stdout.Close()
+	defer ws.stopCmdOut()
 
 	frameSize := ws.width * ws.height * 4
 	buffer := make([]byte, frameSize)
@@ -117,18 +118,25 @@ func (ws *FFmpegWebcamStreamer) readLoop(stdout io.ReadCloser) {
 				Rect:   image.Rect(0, 0, ws.width, ws.height),
 			}
 
-			ws.frameChan <- img
+			select {
+			case ws.frameChan <- img:
+			default:
+			}
 		}
+	}
+}
+
+func (ws *FFmpegWebcamStreamer) stopCmdOut() {
+	if ws.cmd != nil && ws.cmd.Process != nil {
+		ws.cmd.Process.Kill()
+		ws.cmd.Wait()
 	}
 }
 
 func (ws *FFmpegWebcamStreamer) Stop() {
 	ws.stopOnce.Do(func() {
 		close(ws.stopChan)
-		if ws.cmd != nil && ws.cmd.Process != nil {
-			ws.cmd.Process.Kill()
-			ws.cmd.Wait()
-		}
+		ws.stopCmdOut()
 	})
 }
 
